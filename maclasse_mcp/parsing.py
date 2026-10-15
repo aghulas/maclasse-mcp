@@ -242,3 +242,85 @@ def parser_commandes_csv(texte: str) -> list[dict[str, Any]]:
                     pass
         rows.append(d)
     return rows
+
+
+def _montant(s: str | None) -> float | None:
+    if not s:
+        return None
+    m = re.search(r"-?[\d\s\u202f]+(?:[,.]\d+)?", s.replace("€", ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(0).replace("\u202f", "").replace(" ", "").replace(",", "."))
+    except ValueError:
+        return None
+
+
+def parser_versements(html: str) -> list[dict[str, Any]]:
+    """Page /structure/versement : un versement (calculé les 10 et 25 du mois) par ligne."""
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for table in soup.find_all("table"):
+        ths = [th.get_text(" ", strip=True) for th in table.find_all("th")]
+        if "Votre versement" not in ths:
+            continue
+        for tr in table.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) < 9:
+                continue
+            cells = [re.sub(r"\s+", " ", td.get_text(" ", strip=True)) for td in tds]
+            pdf = tr.find("a", href=re.compile(r"createRecap"))
+            det = tr.find("a", href=re.compile(r"/versement/projet/\d+/orders"))
+            out.append({"reference": cells[0], "prise_de_vues": cells[1], "date": cells[2], "ca_total": _montant(cells[3]),
+                        "ca_reel_etablissement": _montant(cells[4]), "part_etablissement": cells[5],
+                        "cheques_especes": _montant(cells[6]), "versement": _montant(cells[7]), "etat": cells[8],
+                        "recap_pdf": pdf["href"] if pdf else None, "detail_commandes": det["href"] if det else None})
+        break
+    return out
+
+
+def parser_statistiques(html: str) -> dict[str, Any]:
+    """Page /project/{uuid}/stats/ : indicateurs de synthèse et rapport détaillé des ventes (par produit)."""
+    soup = BeautifulSoup(html, "html.parser")
+    txt = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+    kpis = {}
+    motifs = {
+        "codes_acces_crees": r"Codes d'accès créés (\d+)", "connectes": r"Utilisateurs connectés avec code d'accès (\d+)",
+        "taux_codes_ayant_commande": r"Codes d'accès utilisés pour une commande ([\d.,]+) %", "visites": r"Nombre total de visites (\d+)",
+        "eleves_ayant_commande": r"Élèves ayant commandé (\d+) / (\d+)", "nb_commandes": r"Nombre total de commandes (\d+)",
+        "panier_moyen_commande": r"Panier moyen par commande ([\d,\.]+) €", "panier_moyen_code": r"Panier moyen par code d'accès ([\d,\.]+) €",
+    }
+    for k, rx in motifs.items():
+        m = re.search(rx, txt)
+        if m:
+            kpis[k] = [g.replace(",", ".") for g in m.groups()] if len(m.groups()) > 1 else m.group(1).replace(",", ".")
+    produits = []
+    t = soup.select_one("#rapport-ventes-table") or next((x for x in soup.find_all("table") if "Nom du produit" in x.get_text()), None)
+    if t is not None:
+        for tr in t.find_all("tr"):
+            tds = [re.sub(r"\s+", " ", td.get_text(" ", strip=True)) for td in tr.find_all("td")]
+            # en-tête sur deux lignes (« Ventes » colspan 3 = Quantité, Montant, Répartition) → 6 cellules par ligne
+            if len(tds) >= 6 and tds[0]:
+                produits.append({"produit": tds[0], "type_classe": tds[1], "prix_unitaire": _montant(tds[2]),
+                                 "quantite": _int(tds[3]), "montant": _montant(tds[4]), "repartition_pct": _montant(tds[5])})
+    return {"indicateurs": kpis, "produits": produits}
+
+
+def parser_paiements_a_valider(html: str) -> list[dict[str, Any]]:
+    """Pages /validation/cheques et /validation/especes : commandes en attente de validation (table, si présente)."""
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for table in soup.find_all("table"):
+        ths = [th.get_text(" ", strip=True) for th in table.find_all("th")]
+        if not ths:
+            continue
+        for tr in table.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) < 3:
+                continue
+            row = {ths[i] if i < len(ths) else f"col{i}": re.sub(r"\s+", " ", td.get_text(" ", strip=True)) for i, td in enumerate(tds)}
+            hid = tr.find("input", attrs={"name": "validation[]"})
+            if hid is not None:
+                row["_validation_id"] = hid.get("value")
+            out.append(row)
+    return out

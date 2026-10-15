@@ -10,20 +10,25 @@ Edumoov/Educartable n'a pas de photo élève (vérifié le 15/10/2026) : rien n'
 | Outil | Rôle | Écrit sur la plateforme |
 |---|---|---|
 | `maclasse_statut` | connexion, dossier local, écritures, jetons en attente | non |
-| `maclasse_prises_de_vues` | prises de vues (uuid projet, commandes, CA) | non |
+| `maclasse_prises_de_vues` | prises de vues (uuid projet, commandes, CA), `archives=True` pour les années précédentes | non |
 | `maclasse_classes` | classes d'une prise de vue (uuid, nb photos, noms associés) | non |
 | `maclasse_eleves` | photos individuelles (uuid élève, nom associé, visites, commandes ; codes sur demande) | non |
 | `maclasse_association_classe` | noms disponibles et photos d'une classe (page « Noms des élèves ») | non |
 | `maclasse_commandes` | toutes les commandes (CSV récapitulatif) + totaux par classe et mode de paiement | non |
 | `maclasse_commandes_html` | texte brut de la page des commandes | non |
+| `maclasse_statistiques` | indicateurs (codes, visites, panier moyen) et rapport des ventes par produit ; PDF sur demande | non |
+| `maclasse_versements` | versements à l'établissement (10 et 25 du mois) ; récapitulatifs PDF sur demande | non |
+| `maclasse_paiements_a_valider` | commandes chèque/espèces en attente de validation (lecture seule) | non |
 | `maclasse_telecharger_vignettes` | ZIP des vignettes (400×533, sans filigrane) → dossier local | non |
 | `maclasse_telecharger_trombinoscope` | PDF trombinoscope (`codes`, `nom_photo`, `aucun`) → dossier local | non |
-| `maclasse_preparer_photos` | pipeline complet → `charlemagne_ideleve/`, index, rapport (2–4 min) | non |
-| `maclasse_rapport` | relit le rapport d'une préparation (si l'appel précédent a expiré côté client) | non |
-| `maclasse_importer_noms_prepare` | import d'une liste Nom/Prénom pour une classe | oui (2 temps) |
+| `maclasse_preparer_photos` | pipeline complet en arrière-plan → `charlemagne_ideleve/`, index, rapport (2–4 min) | non |
+| `maclasse_rapport` | état d'un job (`job=`) ou relecture d'une préparation (`sortie=`) | non |
+| `maclasse_importer_noms_prepare` | import d'une liste Nom/Prénom pour une classe (remplace les noms disponibles, garde les associations) | oui (2 temps) |
 | `maclasse_associer_noms_prepare` | association nom ↔ photo | oui (2 temps) |
 | `maclasse_retirer_noms_prepare` | retrait d'un nom associé | oui (2 temps) |
 | `maclasse_write_confirm` / `maclasse_write_cancel` | exécution / abandon d'une écriture préparée | — |
+
+La validation des paiements chèque/espèces (irréversible sur la plateforme) n'est volontairement pas exposée.
 
 Toute écriture exige `MACLASSE_ENABLE_WRITES=1` **et** une confirmation explicite par jeton.
 

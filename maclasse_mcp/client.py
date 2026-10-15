@@ -6,6 +6,11 @@ Routes observées (15/10/2026, bundle FOS JS Routing de l'application) :
   GET  /project/{uuidProjet}/infos              classes, élèves (codes, uuid), photos de groupe
   GET  /project/{uuidProjet}/orders             détail des commandes (20 par page, formulaire de recherche POST)
   POST /project/{uuidProjet}/orders?nbResultByPage=20&recapitulatif=1   → CSV (virgule, UTF-8) de toutes les commandes
+  GET  /structure/{uuidStructure}/archives      prises de vues des années précédentes (uuidStructure : lien « archives » de l'accueil)
+  GET  /structure/versement                     versements (10 et 25 du mois) ; /versements/projet/createRecap/recapitulatif-versement-{ref}.pdf
+  GET  /project/{uuidProjet}/stats/             statistiques ; ?recapitulatifCSV=1 ; /stats/{uuidProjet}/rapport-ventes.pdf, recap-stats.pdf
+  GET  /validation/cheques | /validation/especes  commandes payées à l'école en attente de validation (POST validation[] : IRRÉVERSIBLE, non exposé)
+  /api/couponAcces (fiches d'accès PDF/JPG/Excel) : appel JSON puis POST vers UrlApiGeneration — non cartographié
   GET  /vignettesParticipants/{uuidProjet}.zip?affName=nameCamel|nameEspace|namePoint|nameTiret
   GET  /trombinoscope/projet/{uuidProjet}/{affName}/{presentation}[/{nbPhoto}]
          affName = nameChild (nom associé, sinon code d'accès) | namePhoto (nom du fichier du photographe) | withoutName
@@ -23,6 +28,7 @@ Journalisation sur stderr uniquement, jamais d'identifiant ni de contenu nominat
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -108,6 +114,24 @@ class MaclasseClient:
         if "text/csv" not in r.headers.get("content-type", ""):
             raise MaclasseError("La plateforme n'a pas renvoyé le CSV des commandes")
         return r.content.decode("utf-8-sig", "replace")
+
+    def archives(self, uuid_structure: str) -> list[parsing.PriseDeVues]:
+        return parsing.parser_accueil(self._get(f"/structure/{uuid_structure}/archives").text)
+
+    def uuid_structure(self) -> str | None:
+        m = re.search(r"/structure/([0-9a-f-]{36})/archives", self._get("/").text)
+        return m.group(1) if m else None
+
+    def versements(self) -> list[dict]:
+        return parsing.parser_versements(self._get("/structure/versement").text)
+
+    def statistiques(self, uuid_projet: str) -> dict:
+        return parsing.parser_statistiques(self._get(f"/project/{uuid_projet}/stats/").text)
+
+    def paiements_a_valider(self, mode: str) -> list[dict]:
+        if mode not in ("cheques", "especes"):
+            raise MaclasseError("mode = cheques | especes")
+        return parsing.parser_paiements_a_valider(self._get(f"/validation/{mode}").text)
 
     def page_association(self, uuid_classe: str) -> parsing.PageAssociation:
         return parsing.parser_association(self._get(f"/triNomParticipants/niveau/{uuid_classe}/tri").text)

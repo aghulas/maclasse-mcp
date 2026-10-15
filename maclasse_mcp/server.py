@@ -14,6 +14,8 @@ import csv
 import datetime
 import io
 import json
+import threading
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,7 @@ mcp = MCPServer(
 )
 
 _client: MaclasseClient | None = None
+_JOBS: dict[str, dict[str, Any]] = {}  # préparations lancées en arrière-plan : id → état
 
 
 def _c() -> MaclasseClient:
@@ -62,9 +65,65 @@ def _horodatage() -> str:
 
 # ------------------------------------------------------------------ lecture
 @mcp.tool()
-def maclasse_prises_de_vues() -> list[dict[str, Any]]:
-    """Liste les prises de vues de l'école (nom, uuid projet, statut, fin des commandes groupées, nb de commandes, CA)."""
-    return to_dict(_c().prises_de_vues())
+def maclasse_prises_de_vues(archives: bool = False) -> list[dict[str, Any]]:
+    """Liste les prises de vues de l'école (nom, uuid projet, statut, fin des commandes groupées, nb de commandes, CA).
+    archives=True ajoute les prises de vues des années précédentes (page « archives » de l'établissement)."""
+    c = _c()
+    out = to_dict(c.prises_de_vues())
+    if archives:
+        us = c.uuid_structure()
+        if us:
+            vus = {p["uuid"] for p in out}
+            out += [dict(p, archive=True) for p in to_dict(c.archives(us)) if p["uuid"] not in vus]
+    return out
+
+
+@mcp.tool()
+def maclasse_versements(telecharger_recaps: bool = False) -> dict[str, Any]:
+    """Versements de la plateforme à l'établissement (calculés les 10 et 25 du mois) : référence, prise de vues, date,
+    CA total, CA réel, part établissement, chèques/espèces encaissés à l'école, montant versé, état. telecharger_recaps
+    enregistre les récapitulatifs PDF (pièces pour la comptabilité) dans MACLASSE_DOWNLOAD_DIR/versements/."""
+    c = _c()
+    rows = c.versements()
+    fichiers = []
+    if telecharger_recaps:
+        d = SETTINGS.download_dir / "versements"
+        for r in rows:
+            if r.get("recap_pdf"):
+                dest = d / f"recapitulatif-versement-{r['reference']}.pdf"
+                if not dest.exists():
+                    c._telecharger(r["recap_pdf"], dest)
+                fichiers.append(str(dest))
+    total = round(sum(r["versement"] or 0 for r in rows), 2)
+    return {"nb_versements": len(rows), "total_verse": total, "versements": rows, "fichiers": fichiers}
+
+
+@mcp.tool()
+def maclasse_statistiques(uuid_projet: str, telecharger_pdf: bool = False) -> dict[str, Any]:
+    """Statistiques d'une prise de vue : codes créés, connectés, visites, élèves ayant commandé, panier moyen, et rapport
+    détaillé des ventes par produit. telecharger_pdf enregistre rapport-ventes.pdf et recap-stats.pdf localement."""
+    c = _c()
+    res = c.statistiques(uuid_projet)
+    if telecharger_pdf:
+        d = _dossier(uuid_projet)
+        res["fichiers"] = []
+        for name in ("rapport-ventes.pdf", "recap-stats.pdf"):
+            dest = d / f"{name[:-4]}_{_horodatage()}.pdf"
+            c._telecharger(f"/stats/{uuid_projet}/{name}", dest)
+            res["fichiers"].append(str(dest))
+    return res
+
+
+@mcp.tool()
+def maclasse_paiements_a_valider(mode: str = "cheques") -> dict[str, Any]:
+    """Commandes payées par chèque ou en espèces à l'école, en attente de validation sur la plateforme (mode : cheques |
+    especes). Lecture seule : la validation est irréversible et se fait à la main sur le site après réception du paiement."""
+    rows = _c().paiements_a_valider(mode)
+    return {"mode": mode, "nb": len(rows), "commandes": rows,
+            "note": "Validation à faire sur ecole.maclasse.photo › Chèques/Espèces, paiement en main (irréversible)."}
+
+
+
 
 
 @mcp.tool()
@@ -123,11 +182,18 @@ def maclasse_commandes(uuid_projet: str, classe: str | None = None, avec_emails:
     par_classe: dict[str, dict[str, Any]] = {}
     par_paiement: dict[str, dict[str, Any]] = {}
     for r in rows:
-        for key, agg in ((r.get("classe", ""), par_classe), (r.get("paiement", ""), par_paiement)):
+        classes_cmd = [x.strip() for x in (r.get("classe") or "").split(",") if x.strip()] or [""]
+        cle_classe = classes_cmd[0] if len(classes_cmd) == 1 else "plusieurs classes"
+        for key, agg in ((cle_classe, par_classe), (r.get("paiement", ""), par_paiement)):
             a = agg.setdefault(key, {"commandes": 0, "montant": 0.0, "part_etablissement": 0.0})
             a["commandes"] += 1
             a["montant"] += r["montant"] if isinstance(r.get("montant"), float) else 0.0
             a["part_etablissement"] += r["part_etablissement"] if isinstance(r.get("part_etablissement"), float) else 0.0
+        if len(classes_cmd) > 1:  # une commande multi-enfants compte aussi, en nombre seulement, pour chaque classe concernée
+            for cl in classes_cmd:
+                par_classe.setdefault(cl, {"commandes": 0, "montant": 0.0, "part_etablissement": 0.0})
+                par_classe[cl].setdefault("dont_multi_classes", 0)
+                par_classe[cl]["dont_multi_classes"] += 1
     for agg in (par_classe, par_paiement):
         for a in agg.values():
             a["montant"] = round(a["montant"], 2)
@@ -167,16 +233,7 @@ def maclasse_telecharger_trombinoscope(uuid_projet: str, libelle: str = "codes",
     return {"fichier": str(p), "octets": p.stat().st_size}
 
 
-@mcp.tool()
-def maclasse_preparer_photos(uuid_projet: str, liste_eleves: str, classes_map: dict[str, str] | None = None,
-                             sortie: str | None = None, par_page: int = 6) -> dict[str, Any]:
-    """Pipeline complet : télécharge vignettes + trombinoscopes (codes, nom_photo), rapproche chaque photo de la liste
-    Charlemagne et produit charlemagne_ideleve/ (IDELEVE.jpg), index CSV et RAPPORT.md (pas de dossier Edumoov :
-    Edumoov n'a pas de photo élève).
-    Dure 2 à 4 minutes (génération côté plateforme) : si le client expire, ne pas relancer — lire le résultat avec
-    maclasse_rapport(sortie). Le dossier de sortie doit être nouveau (aucun fichier n'est écrasé).
-    liste_eleves : chemin du JSON de l'outil Charlemagne liste_eleves (ou CSV). classes_map : {classe maclasse: classe
-    Charlemagne} ; si absent, correspondance automatique sur le nom normalisé (ex. CE1A ↔ CE1 A) avec les écarts signalés."""
+def _preparer(uuid_projet: str, liste_eleves: str, classes_map: dict[str, str] | None, out_dir: Path, par_page: int) -> dict[str, Any]:
     c = _c()
     classes = c.projet(uuid_projet)
     eleves = prep.charger_eleves(liste_eleves)
@@ -188,28 +245,75 @@ def maclasse_preparer_photos(uuid_projet: str, liste_eleves: str, classes_map: d
             if len(cands) == 1:
                 classes_map[cl.nom] = cands[0]
     manquantes = [cl.nom for cl in classes if cl.nom not in classes_map]
-    out_dir = Path(sortie) if sortie else _dossier(uuid_projet) / f"preparation_{_horodatage()}"
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "classes_map.json").write_text(json.dumps(classes_map, ensure_ascii=False, indent=1), encoding="utf-8")
     zip_path = c.telecharger_vignettes(uuid_projet, out_dir / "vignettes.zip")
     t_codes = c.telecharger_trombinoscope(uuid_projet, out_dir / "trombinoscope_codes.pdf", "codes", par_page or None)
     t_noms = c.telecharger_trombinoscope(uuid_projet, out_dir / "trombinoscope_noms_photo.pdf", "nom_photo", par_page or None)
-    (out_dir / "classes_map.json").write_text(json.dumps(classes_map, ensure_ascii=False, indent=1), encoding="utf-8")
     res = prep.preparer(zip_path, t_codes, t_noms, liste_eleves, classes_map, out_dir)
     res["classes_map"] = classes_map
     res["classes_sans_correspondance"] = manquantes
     return res
 
 
+def _job_run(job_id: str, **kw: Any) -> None:
+    j = _JOBS[job_id]
+    try:
+        j["resultat"] = _preparer(**kw)
+        j["etat"] = "termine"
+    except Exception as e:  # noqa: BLE001 — l'erreur est rendue par maclasse_rapport
+        j["etat"] = "erreur"
+        j["erreur"] = f"{type(e).__name__}: {e}"
+        j["trace"] = traceback.format_exc()[-2000:]
+    finally:
+        j["fin"] = datetime.datetime.now().isoformat(timespec="seconds")
+
+
 @mcp.tool()
-def maclasse_rapport(sortie: str) -> dict[str, Any]:
-    """Relit le RAPPORT.md et les compteurs d'une préparation déjà faite (utile si l'appel à maclasse_preparer_photos
-    a dépassé le délai du client : le traitement continue sur le Mac et se termine en 2 à 4 minutes)."""
+def maclasse_preparer_photos(uuid_projet: str, liste_eleves: str, classes_map: dict[str, str] | None = None,
+                             sortie: str | None = None, par_page: int = 6, en_arriere_plan: bool = True) -> dict[str, Any]:
+    """Pipeline complet : télécharge vignettes + trombinoscopes (codes, nom_photo), rapproche chaque photo de la liste
+    Charlemagne et produit charlemagne_ideleve/ (IDELEVE.jpg), index CSV et RAPPORT.md (pas de dossier Edumoov :
+    Edumoov n'a pas de photo élève). Le dossier de sortie doit être nouveau (aucun fichier n'est écrasé).
+    Dure 2 à 4 minutes (génération côté plateforme) : par défaut le traitement part en arrière-plan et l'outil renvoie
+    tout de suite {job, sortie} ; suivre avec maclasse_rapport(job=…) ou maclasse_rapport(sortie=…). en_arriere_plan=False
+    attend la fin (scripts). liste_eleves : chemin du JSON de l'outil Charlemagne liste_eleves (ou CSV). classes_map :
+    {classe maclasse: classe Charlemagne} ; si absent, correspondance automatique sur le nom normalisé (ex. CE1A ↔ CE1 A)
+    avec les écarts signalés."""
+    out_dir = Path(sortie) if sortie else _dossier(uuid_projet) / f"preparation_{_horodatage()}"
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise MaclasseError(f"Dossier de sortie non vide, choisir un dossier nouveau : {out_dir}")
+    kw = dict(uuid_projet=uuid_projet, liste_eleves=liste_eleves, classes_map=classes_map, out_dir=out_dir, par_page=par_page)
+    if not en_arriere_plan:
+        return _preparer(**kw)
+    job_id = _horodatage()
+    _JOBS[job_id] = {"etat": "en_cours", "sortie": str(out_dir), "debut": datetime.datetime.now().isoformat(timespec="seconds")}
+    threading.Thread(target=_job_run, args=(job_id,), kwargs=kw, daemon=True, name=f"maclasse-prep-{job_id}").start()
+    return {"job": job_id, "etat": "en_cours", "sortie": str(out_dir),
+            "consigne": "Relire dans 2 à 4 minutes avec maclasse_rapport(job=…) ; ne pas relancer la préparation."}
+
+
+@mcp.tool()
+def maclasse_rapport(sortie: str | None = None, job: str | None = None) -> dict[str, Any]:
+    """État d'une préparation : par identifiant de job (lancée en arrière-plan dans cette session du serveur) ou par
+    dossier de sortie (relecture de RAPPORT.md, y compris après redémarrage). Sans argument : liste des jobs connus."""
+    if job is not None:
+        j = _JOBS.get(job)
+        if j is None:
+            return {"job": job, "etat": "inconnu", "jobs_connus": sorted(_JOBS)}
+        out = {k: v for k, v in j.items() if k != "resultat"}
+        out["job"] = job
+        if j["etat"] == "termine":
+            out["resultat"] = j["resultat"]
+        return out
+    if sortie is None:
+        return {"jobs": [{"job": k, "etat": v["etat"], "sortie": v["sortie"]} for k, v in sorted(_JOBS.items())]}
     d = Path(sortie)
     rap = d / "RAPPORT.md"
     if not rap.exists():
         attendus = ["vignettes.zip", "trombinoscope_codes.pdf", "trombinoscope_noms_photo.pdf"]
         return {"termine": False, "fichiers_presents": [f for f in attendus if (d / f).exists()],
-                "conseil": "Traitement en cours ou échoué : réessayer dans une minute, puis vérifier les journaux du serveur."}
+                "conseil": "Traitement en cours ou échoué : réessayer dans une minute, ou maclasse_rapport(job=…) pour l'erreur."}
     n_charl = len(list((d / "charlemagne_ideleve").glob("*.jpg"))) if (d / "charlemagne_ideleve").exists() else 0
     return {"termine": True, "photos_charlemagne": n_charl, "rapport": rap.read_text(encoding="utf-8")}
 
@@ -217,7 +321,10 @@ def maclasse_rapport(sortie: str) -> dict[str, Any]:
 # ------------------------------------------------------------------ écriture (deux temps)
 @mcp.tool()
 def maclasse_importer_noms_prepare(uuid_classe: str, eleves: list[dict[str, str]]) -> dict[str, Any]:
-    """Prépare l'import de la liste de noms d'une classe (remplace la liste existante sur la plateforme).
+    """Prépare l'import de la liste de noms d'une classe. Vérifié le 15/10/2026 : l'import remplace la liste des noms
+    DISPONIBLES (non encore attribués) et conserve les associations déjà faites ; les noms déjà associés ne doivent donc
+    pas être réimportés (sinon ils apparaissent en double). Pour une classe entièrement associée, n'importer que les
+    noms manquants (absents, nouveaux élèves).
     eleves : [{"nom": ..., "prenom": ...}, ...]. Renvoie un aperçu et un jeton pour maclasse_write_confirm."""
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
@@ -227,7 +334,9 @@ def maclasse_importer_noms_prepare(uuid_classe: str, eleves: list[dict[str, str]
     data = buf.getvalue().encode("utf-8")
     page = _c().page_association(uuid_classe)
     apercu = {"classe": page.classe, "nb_noms": len(eleves), "nb_photos": len(page.photos),
-              "liste_actuelle_remplacee": len(page.noms_disponibles) + sum(1 for p in page.photos if p["nom_associe"]),
+              "noms_disponibles_remplaces": len(page.noms_disponibles), "photos_deja_nommees": sum(1 for p in page.photos if p["nom_associe"]),
+              "deja_associes_dans_la_liste": [f"{e.get('nom','')} {e.get('prenom','')}" for e in eleves
+                                             if normaliser(f"{e.get('nom','')} {e.get('prenom','')}") in {normaliser(p["nom_associe"]) for p in page.photos if p["nom_associe"]}][:10],
               "premiers": [f"{e.get('nom','')} {e.get('prenom','')}" for e in eleves[:3]]}
 
     def run() -> dict[str, Any]:
