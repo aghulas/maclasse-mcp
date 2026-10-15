@@ -4,7 +4,8 @@ Routes observées (15/10/2026, bundle FOS JS Routing de l'application) :
   POST /login                                   _username, _password (formulaire Symfony, pas de jeton CSRF)
   GET  /                                        prises de vues
   GET  /project/{uuidProjet}/infos              classes, élèves (codes, uuid), photos de groupe
-  GET  /project/{uuidProjet}/orders             détail des commandes
+  GET  /project/{uuidProjet}/orders             détail des commandes (20 par page, formulaire de recherche POST)
+  POST /project/{uuidProjet}/orders?nbResultByPage=20&recapitulatif=1   → CSV (virgule, UTF-8) de toutes les commandes
   GET  /vignettesParticipants/{uuidProjet}.zip?affName=nameCamel|nameEspace|namePoint|nameTiret
   GET  /trombinoscope/projet/{uuidProjet}/{affName}/{presentation}[/{nbPhoto}]
          affName = nameChild (nom associé, sinon code d'accès) | namePhoto (nom du fichier du photographe) | withoutName
@@ -99,6 +100,14 @@ class MaclasseClient:
 
     def commandes_html(self, uuid_projet: str) -> str:
         return self._get(f"/project/{uuid_projet}/orders").text
+
+    def commandes_csv(self, uuid_projet: str) -> str:
+        """Récapitulatif CSV de toutes les commandes (bouton « Télécharger le récapitulatif »)."""
+        r = self._request("POST", f"/project/{uuid_projet}/orders", params={"nbResultByPage": 20, "recapitulatif": 1})
+        r.raise_for_status()
+        if "text/csv" not in r.headers.get("content-type", ""):
+            raise MaclasseError("La plateforme n'a pas renvoyé le CSV des commandes")
+        return r.content.decode("utf-8-sig", "replace")
 
     def page_association(self, uuid_classe: str) -> parsing.PageAssociation:
         return parsing.parser_association(self._get(f"/triNomParticipants/niveau/{uuid_classe}/tri").text)

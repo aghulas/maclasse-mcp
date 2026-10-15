@@ -216,3 +216,29 @@ def to_dict(obj: Any) -> Any:
             d["nb_noms_associes"] = obj.nb_noms_associes
         return d
     return obj
+
+
+COLONNES_COMMANDES = {
+    "Classe": "classe", "Montant (€)": "montant", "N° de commande": "reference", "Mode de paiement": "paiement",
+    "Code élève": "code", "Nom et prénom du/des élève(s)": "eleves", "Email du client": "email_client",
+    "Nom et prénom du client": "client", "Date de paiement": "date_paiement", "Type de commande": "type",
+    "Mode d'encaissement comptable": "encaissement", "Part pour l'établissement": "part_etablissement",
+}
+
+
+def parser_commandes_csv(texte: str) -> list[dict[str, Any]]:
+    """CSV « récapitulatif » des commandes (virgule, en-tête française) → lignes normalisées ; montants en float."""
+    import csv
+    import io
+
+    rows = []
+    for r in csv.DictReader(io.StringIO(texte)):
+        d = {COLONNES_COMMANDES.get(k.strip(), k.strip()): (v or "").strip() for k, v in r.items() if k}
+        for k in ("montant", "part_etablissement"):
+            if k in d:
+                try:
+                    d[k] = float(d[k].replace("\u202f", "").replace(" ", "").replace(",", "."))
+                except ValueError:
+                    pass
+        rows.append(d)
+    return rows

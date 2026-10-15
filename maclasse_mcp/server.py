@@ -103,6 +103,43 @@ def maclasse_association_classe(uuid_classe: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def maclasse_commandes(uuid_projet: str, classe: str | None = None, avec_emails: bool = False, enregistrer: bool = True) -> dict[str, Any]:
+    """Toutes les commandes d'une prise de vue (récapitulatif CSV de la plateforme) : par commande classe, montant,
+    référence, mode de paiement, code élève, élève(s), client, date, type, encaissement, part établissement ; plus des
+    totaux par classe et par mode de paiement. Les emails des clients ne sont renvoyés que si avec_emails=True.
+    Si enregistrer, le CSV brut est conservé dans MACLASSE_DOWNLOAD_DIR/<projet>/commandes_<horodatage>.csv."""
+    from .parsing import parser_commandes_csv
+
+    texte = _c().commandes_csv(uuid_projet)
+    fichier = None
+    if enregistrer:
+        p = _dossier(uuid_projet) / f"commandes_{_horodatage()}.csv"
+        p.write_text(texte, encoding="utf-8")
+        p.chmod(0o600)
+        fichier = str(p)
+    rows = parser_commandes_csv(texte)
+    if classe:
+        rows = [r for r in rows if normaliser(r.get("classe")) == normaliser(classe)]
+    par_classe: dict[str, dict[str, Any]] = {}
+    par_paiement: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        for key, agg in ((r.get("classe", ""), par_classe), (r.get("paiement", ""), par_paiement)):
+            a = agg.setdefault(key, {"commandes": 0, "montant": 0.0, "part_etablissement": 0.0})
+            a["commandes"] += 1
+            a["montant"] += r["montant"] if isinstance(r.get("montant"), float) else 0.0
+            a["part_etablissement"] += r["part_etablissement"] if isinstance(r.get("part_etablissement"), float) else 0.0
+    for agg in (par_classe, par_paiement):
+        for a in agg.values():
+            a["montant"] = round(a["montant"], 2)
+            a["part_etablissement"] = round(a["part_etablissement"], 2)
+    if not avec_emails:
+        rows = [{k: v for k, v in r.items() if k != "email_client"} for r in rows]
+    return {"nb_commandes": len(rows), "total": round(sum(r["montant"] for r in rows if isinstance(r.get("montant"), float)), 2),
+            "part_etablissement": round(sum(r["part_etablissement"] for r in rows if isinstance(r.get("part_etablissement"), float)), 2),
+            "par_classe": par_classe, "par_paiement": par_paiement, "commandes": rows, "fichier": fichier}
+
+
+@mcp.tool()
 def maclasse_commandes_html(uuid_projet: str, max_chars: int = 20000) -> str:
     """Texte brut de la page « Détail des commandes » (structure non encore cartographiée) — pour lecture ponctuelle."""
     from bs4 import BeautifulSoup
@@ -135,6 +172,8 @@ def maclasse_preparer_photos(uuid_projet: str, liste_eleves: str, classes_map: d
                              sortie: str | None = None, par_page: int = 6) -> dict[str, Any]:
     """Pipeline complet : télécharge vignettes + trombinoscopes (codes, nom_photo), rapproche chaque photo de la liste
     Charlemagne et produit charlemagne_ideleve/ (IDELEVE.jpg), edumoov_par_classe/, index CSV et RAPPORT.md.
+    Dure 2 à 4 minutes (génération côté plateforme) : si le client expire, ne pas relancer — lire le résultat avec
+    maclasse_rapport(sortie). Le dossier de sortie doit être nouveau (aucun fichier n'est écrasé).
     liste_eleves : chemin du JSON de l'outil Charlemagne liste_eleves (ou CSV). classes_map : {classe maclasse: classe
     Charlemagne} ; si absent, correspondance automatique sur le nom normalisé (ex. CE1A ↔ CE1 A) avec les écarts signalés."""
     c = _c()
@@ -158,6 +197,21 @@ def maclasse_preparer_photos(uuid_projet: str, liste_eleves: str, classes_map: d
     res["classes_map"] = classes_map
     res["classes_sans_correspondance"] = manquantes
     return res
+
+
+@mcp.tool()
+def maclasse_rapport(sortie: str) -> dict[str, Any]:
+    """Relit le RAPPORT.md et les compteurs d'une préparation déjà faite (utile si l'appel à maclasse_preparer_photos
+    a dépassé le délai du client : le traitement continue sur le Mac et se termine en 2 à 4 minutes)."""
+    d = Path(sortie)
+    rap = d / "RAPPORT.md"
+    if not rap.exists():
+        attendus = ["vignettes.zip", "trombinoscope_codes.pdf", "trombinoscope_noms_photo.pdf"]
+        return {"termine": False, "fichiers_presents": [f for f in attendus if (d / f).exists()],
+                "conseil": "Traitement en cours ou échoué : réessayer dans une minute, puis vérifier les journaux du serveur."}
+    n_charl = len(list((d / "charlemagne_ideleve").glob("*.jpg"))) if (d / "charlemagne_ideleve").exists() else 0
+    classes = sorted(p.name for p in (d / "edumoov_par_classe").iterdir()) if (d / "edumoov_par_classe").exists() else []
+    return {"termine": True, "photos_charlemagne": n_charl, "classes_edumoov": classes, "rapport": rap.read_text(encoding="utf-8")}
 
 
 # ------------------------------------------------------------------ écriture (deux temps)

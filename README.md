@@ -13,10 +13,12 @@ prépare les photos des élèves pour Charlemagne (affectation automatique par I
 | `maclasse_classes` | classes d'une prise de vue (uuid, nb photos, noms associés) | non |
 | `maclasse_eleves` | photos individuelles (uuid élève, nom associé, visites, commandes ; codes sur demande) | non |
 | `maclasse_association_classe` | noms disponibles et photos d'une classe (page « Noms des élèves ») | non |
-| `maclasse_commandes_html` | texte de la page des commandes (non cartographiée) | non |
+| `maclasse_commandes` | toutes les commandes (CSV récapitulatif) + totaux par classe et mode de paiement | non |
+| `maclasse_commandes_html` | texte brut de la page des commandes | non |
 | `maclasse_telecharger_vignettes` | ZIP des vignettes (400×533, sans filigrane) → dossier local | non |
 | `maclasse_telecharger_trombinoscope` | PDF trombinoscope (`codes`, `nom_photo`, `aucun`) → dossier local | non |
-| `maclasse_preparer_photos` | pipeline complet → `charlemagne_ideleve/`, `edumoov_par_classe/`, index, rapport | non |
+| `maclasse_preparer_photos` | pipeline complet → `charlemagne_ideleve/`, `edumoov_par_classe/`, index, rapport (2–4 min) | non |
+| `maclasse_rapport` | relit le rapport d'une préparation (si l'appel précédent a expiré côté client) | non |
 | `maclasse_importer_noms_prepare` | import d'une liste Nom/Prénom pour une classe | oui (2 temps) |
 | `maclasse_associer_noms_prepare` | association nom ↔ photo | oui (2 temps) |
 | `maclasse_retirer_noms_prepare` | retrait d'un nom associé | oui (2 temps) |

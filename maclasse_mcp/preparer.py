@@ -111,6 +111,7 @@ def preparer(vignettes: str | Path, trombi_codes: str | Path, trombi_noms: str |
         used: set[str] = set()
         rows = []
         for i, (label, lab_photo) in enumerate(zip(cd["labels"], nd["labels"])):
+            label = re.sub(r"\s+", " ", label.replace("\t", " ")).strip()  # code d'accès, ou nom associé une fois l'association faite
             nom_photo = re.sub(r"\.jpe?g$", "", lab_photo.replace("\t", " ").strip(), flags=re.I).strip()
             row: dict[str, Any] = {"pos": i + 1, "code": label, "nom_photographe": nom_photo, "id": None, "nom": None, "prenom": None, "score": 1.0}
             exact = [e for e in els if e["id"] not in used and normaliser(e["nom"] + " " + e["prenom"]) == normaliser(nom_photo)]
