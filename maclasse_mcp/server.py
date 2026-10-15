@@ -2,7 +2,7 @@
 
 Lecture : prises de vues, classes et élèves (codes d'accès, uuid, nom associé, visites, commandes),
 page d'association d'une classe. Exports locaux : ZIP des vignettes, trombinoscopes PDF, et
-pipeline complet de préparation Charlemagne/Edumoov (preparer.py). Écriture (import de noms,
+pipeline complet de préparation des photos pour Charlemagne (preparer.py). Écriture (import de noms,
 association nom ↔ photo, retrait) : toujours en deux temps *_prepare_* puis maclasse_write_confirm,
 et seulement si MACLASSE_ENABLE_WRITES=1.
 
@@ -171,7 +171,8 @@ def maclasse_telecharger_trombinoscope(uuid_projet: str, libelle: str = "codes",
 def maclasse_preparer_photos(uuid_projet: str, liste_eleves: str, classes_map: dict[str, str] | None = None,
                              sortie: str | None = None, par_page: int = 6) -> dict[str, Any]:
     """Pipeline complet : télécharge vignettes + trombinoscopes (codes, nom_photo), rapproche chaque photo de la liste
-    Charlemagne et produit charlemagne_ideleve/ (IDELEVE.jpg), edumoov_par_classe/, index CSV et RAPPORT.md.
+    Charlemagne et produit charlemagne_ideleve/ (IDELEVE.jpg), index CSV et RAPPORT.md (pas de dossier Edumoov :
+    Edumoov n'a pas de photo élève).
     Dure 2 à 4 minutes (génération côté plateforme) : si le client expire, ne pas relancer — lire le résultat avec
     maclasse_rapport(sortie). Le dossier de sortie doit être nouveau (aucun fichier n'est écrasé).
     liste_eleves : chemin du JSON de l'outil Charlemagne liste_eleves (ou CSV). classes_map : {classe maclasse: classe
@@ -210,8 +211,7 @@ def maclasse_rapport(sortie: str) -> dict[str, Any]:
         return {"termine": False, "fichiers_presents": [f for f in attendus if (d / f).exists()],
                 "conseil": "Traitement en cours ou échoué : réessayer dans une minute, puis vérifier les journaux du serveur."}
     n_charl = len(list((d / "charlemagne_ideleve").glob("*.jpg"))) if (d / "charlemagne_ideleve").exists() else 0
-    classes = sorted(p.name for p in (d / "edumoov_par_classe").iterdir()) if (d / "edumoov_par_classe").exists() else []
-    return {"termine": True, "photos_charlemagne": n_charl, "classes_edumoov": classes, "rapport": rap.read_text(encoding="utf-8")}
+    return {"termine": True, "photos_charlemagne": n_charl, "rapport": rap.read_text(encoding="utf-8")}
 
 
 # ------------------------------------------------------------------ écriture (deux temps)

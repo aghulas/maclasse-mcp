@@ -2,7 +2,8 @@
 
 Serveur MCP **non officiel** pour l'espace établissement [ecole.maclasse.photo](https://ecole.maclasse.photo)
 (photos scolaires). Il lit les pages HTML du site avec le compte de l'école (aucune API publique) et
-prépare les photos des élèves pour Charlemagne (affectation automatique par IDELEVE) et Edumoov/Educartable.
+prépare les photos des élèves pour Charlemagne (affectation automatique par IDELEVE), d'où elles partent vers EcoleDirecte.
+Edumoov/Educartable n'a pas de photo élève (vérifié le 15/10/2026) : rien n'est produit pour lui.
 
 ## Outils
 
@@ -17,7 +18,7 @@ prépare les photos des élèves pour Charlemagne (affectation automatique par I
 | `maclasse_commandes_html` | texte brut de la page des commandes | non |
 | `maclasse_telecharger_vignettes` | ZIP des vignettes (400×533, sans filigrane) → dossier local | non |
 | `maclasse_telecharger_trombinoscope` | PDF trombinoscope (`codes`, `nom_photo`, `aucun`) → dossier local | non |
-| `maclasse_preparer_photos` | pipeline complet → `charlemagne_ideleve/`, `edumoov_par_classe/`, index, rapport (2–4 min) | non |
+| `maclasse_preparer_photos` | pipeline complet → `charlemagne_ideleve/`, index, rapport (2–4 min) | non |
 | `maclasse_rapport` | relit le rapport d'une préparation (si l'appel précédent a expiré côté client) | non |
 | `maclasse_importer_noms_prepare` | import d'une liste Nom/Prénom pour une classe | oui (2 temps) |
 | `maclasse_associer_noms_prepare` | association nom ↔ photo | oui (2 temps) |

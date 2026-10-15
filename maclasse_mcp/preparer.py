@@ -1,4 +1,7 @@
-"""Préparation des photos pour Charlemagne et Edumoov à partir des exports maclasse.photo.
+"""Préparation des photos pour Charlemagne (puis EcoleDirecte) à partir des exports maclasse.photo.
+
+Edumoov/Educartable n'a pas de photo élève (vérifié le 15/10/2026 dans le code des applications) :
+aucun dossier n'est produit pour lui.
 
 Principe : le trombinoscope « nom de l'élève » (= code d'accès tant qu'aucun nom n'est associé)
 et le trombinoscope « nom de la photo » (= nom de fichier du photographe, `NOM Prénom.jpg`)
@@ -111,9 +114,7 @@ def preparer(vignettes: str | Path, trombi_codes: str | Path, trombi_noms: str |
     noms = labels_trombinoscope(trombi_noms)
 
     d_charl = sortie / "charlemagne_ideleve"
-    d_edu = sortie / "edumoov_par_classe"
     d_charl.mkdir(exist_ok=True)
-    d_edu.mkdir(exist_ok=True)
     mapping: dict[str, list[dict[str, Any]]] = {}
     index: list[dict[str, Any]] = []
     total = 0
@@ -167,9 +168,6 @@ def preparer(vignettes: str | Path, trombi_codes: str | Path, trombi_noms: str |
                     row["silhouette"] = True
                 else:
                     optimiser_jpeg(f, d_charl / f"{e['id']}.jpg")
-                    cdir = d_edu / cls_charl.replace("/", "-")
-                    cdir.mkdir(exist_ok=True)
-                    optimiser_jpeg(f, cdir / f"{e['nom']} {e['prenom']}.jpg")
                     total += 1
             rows.append(row)
             index.append({"classe_maclasse": cls, "classe_charlemagne": cls_charl, "code": label, "ideleve": row["id"] or "",
@@ -192,7 +190,7 @@ def preparer(vignettes: str | Path, trombi_codes: str | Path, trombi_noms: str |
 
     rapport = (f"# Photos élèves — rapport du {datetime.date.today():%d/%m/%Y}\n\n"
                f"- Photos appariées et copiées : **{total}** (JPEG sans métadonnées, ≤ 100 Ko)\n"
-               f"- Dossiers : `charlemagne_ideleve/` (IDELEVE.jpg) et `edumoov_par_classe/<classe>/NOM Prénom.jpg`\n")
+               f"- Dossier : `charlemagne_ideleve/` (IDELEVE.jpg) — affectation automatique Charlemagne, puis envoi EcoleDirecte\n")
     rapport += section("Silhouettes exclues (élève listé par le photographe mais non photographié) — `exclus_silhouettes/`", silhouettes)
     rapport += section("Rapprochements approximatifs (orthographe photographe ≠ Charlemagne) — à relire", approx)
     rapport += section("Photos non appariées — à arbitrer", non_apparies)
