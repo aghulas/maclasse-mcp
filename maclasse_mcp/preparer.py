@@ -24,6 +24,31 @@ from typing import Any
 from .parsing import normaliser
 
 CODE_LIKE = re.compile(r"^[A-Z0-9]{6,12}$")
+POIDS_MAX = 100_000  # Aplim : « poids maxi des fichiers image 100 ko », résolution conseillée 480×640, .jpg
+
+
+def est_silhouette(path: Path, max_couleurs: int = 300) -> bool:
+    """Vrai si l'image est le pictogramme gris « pas de photo » du photographe (très peu de couleurs distinctes)."""
+    from PIL import Image
+
+    with Image.open(path) as im:
+        couleurs = im.convert("RGB").getcolors(maxcolors=max_couleurs + 1)
+    return couleurs is not None and len(couleurs) <= max_couleurs
+
+
+def optimiser_jpeg(src: Path, dest: Path) -> int:
+    """Copie en JPEG sans métadonnées (EXIF, GPS, orientation) et sous POIDS_MAX en baissant la qualité si besoin."""
+    from PIL import Image
+
+    with Image.open(src) as im:
+        im = im.convert("RGB")
+        q = 92
+        while True:
+            im.save(dest, "JPEG", quality=q, optimize=True)
+            if dest.stat().st_size <= POIDS_MAX or q <= 60:
+                break
+            q -= 5
+    return dest.stat().st_size
 
 
 def labels_trombinoscope(path: str | Path) -> dict[str, dict[str, Any]]:
@@ -96,6 +121,8 @@ def preparer(vignettes: str | Path, trombi_codes: str | Path, trombi_noms: str |
     sans_photo: list[str] = []
     non_apparies: list[str] = []
     ignorees: list[str] = []
+    silhouettes: list[str] = []
+    d_excl = sortie / "exclus_silhouettes"
 
     for cls, cd in codes.items():
         if cls not in classes_map:
@@ -133,15 +160,21 @@ def preparer(vignettes: str | Path, trombi_codes: str | Path, trombi_noms: str |
                 f = fichiers.get(normaliser(label))
                 if f is None:
                     non_apparies.append(f"{cls_charl} : aucun fichier du ZIP ne porte le libellé « {label} »")
+                elif est_silhouette(f):
+                    d_excl.mkdir(exist_ok=True)
+                    shutil.copy2(f, d_excl / f"{e['id']}.jpg")
+                    silhouettes.append(f"{cls_charl} : {e['nom']} {e['prenom']} (IDELEVE {e['id']}) — silhouette du photographe, pas de photo prise")
+                    row["silhouette"] = True
                 else:
-                    shutil.copy2(f, d_charl / f"{e['id']}.jpg")
+                    optimiser_jpeg(f, d_charl / f"{e['id']}.jpg")
                     cdir = d_edu / cls_charl.replace("/", "-")
                     cdir.mkdir(exist_ok=True)
-                    shutil.copy2(f, cdir / f"{e['nom']} {e['prenom']}.jpg")
+                    optimiser_jpeg(f, cdir / f"{e['nom']} {e['prenom']}.jpg")
                     total += 1
             rows.append(row)
             index.append({"classe_maclasse": cls, "classe_charlemagne": cls_charl, "code": label, "ideleve": row["id"] or "",
-                          "nom": row["nom"] or "", "prenom": row["prenom"] or "", "nom_photographe": nom_photo, "position": i + 1, "score": row["score"]})
+                          "nom": row["nom"] or "", "prenom": row["prenom"] or "", "nom_photographe": nom_photo, "position": i + 1,
+                          "score": row["score"], "statut": "silhouette" if row.get("silhouette") else ("ok" if row["id"] else "non apparié")})
         mapping[cls] = rows
         for e in els:
             if e["id"] not in used:
@@ -158,17 +191,20 @@ def preparer(vignettes: str | Path, trombi_codes: str | Path, trombi_noms: str |
         return f"\n## {t} ({len(items)})\n\n" + ("\n".join("- " + x for x in items) if items else "- aucun") + "\n"
 
     rapport = (f"# Photos élèves — rapport du {datetime.date.today():%d/%m/%Y}\n\n"
-               f"- Photos appariées et copiées : **{total}**\n"
+               f"- Photos appariées et copiées : **{total}** (JPEG sans métadonnées, ≤ 100 Ko)\n"
                f"- Dossiers : `charlemagne_ideleve/` (IDELEVE.jpg) et `edumoov_par_classe/<classe>/NOM Prénom.jpg`\n")
+    rapport += section("Silhouettes exclues (élève listé par le photographe mais non photographié) — `exclus_silhouettes/`", silhouettes)
     rapport += section("Rapprochements approximatifs (orthographe photographe ≠ Charlemagne) — à relire", approx)
     rapport += section("Photos non appariées — à arbitrer", non_apparies)
     rapport += section("Élèves sans photo", sans_photo)
     rapport += section("Classes du trombinoscope ignorées (hors correspondance)", ignorees)
-    rapport += ("\n## Étapes Charlemagne (manuelles)\n\n1. Administratif › Outils › Affectation des photos › (RAZ optionnelle)\n"
-                "2. Affectation automatique sur `charlemagne_ideleve/`\n3. EcoleDirecte : « À intégrer au prochain envoi » puis envoi\n")
+    rapport += ("\n## Étapes Charlemagne (manuelles, session RDP)\n\n"
+                "1. Copier `charlemagne_ideleve/` dans `~/Downloads/charlemagne_auto/` (seul dossier visible de la session : `\\\\tsclient\\Downloads`)\n"
+                "2. Administratif › Outils › Affectation des photos › Élèves – Adultes : RAZ (optionnelle, ne supprime rien), bouton de copie du dossier, puis Affectation automatique (fichiers nommés par identifiant logiciel)\n"
+                "3. Vérifier quelques fiches, puis Charlemagne Outils › EcoleDirecte : « À intégrer au prochain envoi » et transfert\n")
     (sortie / "RAPPORT.md").write_text(rapport, encoding="utf-8")
     return {"photos_copiees": total, "approximatifs": approx, "non_apparies": non_apparies, "sans_photo": sans_photo,
-            "classes_ignorees": ignorees, "sortie": str(sortie), "rapport": rapport}
+            "silhouettes": silhouettes, "classes_ignorees": ignorees, "sortie": str(sortie), "rapport": rapport}
 
 
 def main() -> None:  # CLI : python -m maclasse_mcp.preparer ...
