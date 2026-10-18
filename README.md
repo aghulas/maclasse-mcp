@@ -11,8 +11,8 @@ Edumoov/Educartable n'a pas de photo élève (vérifié le 15/10/2026) : rien n'
 |---|---|---|
 | `maclasse_statut` | connexion, dossier local, écritures, jetons en attente | non |
 | `maclasse_prises_de_vues` | prises de vues (uuid projet, commandes, CA), `archives=True` pour les années précédentes | non |
-| `maclasse_classes` | classes d'une prise de vue (uuid, nb photos, noms associés) | non |
-| `maclasse_eleves` | photos individuelles (uuid élève, nom associé, visites, commandes ; codes sur demande) | non |
+| `maclasse_classes` | classes d'une prise de vue (uuid, `type_classe` classe/fratrie, nb photos, noms associés) | non |
+| `maclasse_eleves` (+ `sans_visite`) | photos individuelles (uuid élève, nom associé, visites, commandes ; codes sur demande) | non |
 | `maclasse_association_classe` | noms disponibles et photos d'une classe (page « Noms des élèves ») | non |
 | `maclasse_commandes` | toutes les commandes (CSV récapitulatif) + totaux par classe et mode de paiement | non |
 | `maclasse_commandes_html` | texte brut de la page des commandes | non |
@@ -21,6 +21,8 @@ Edumoov/Educartable n'a pas de photo élève (vérifié le 15/10/2026) : rien n'
 | `maclasse_paiements_a_valider` | commandes chèque/espèces en attente de validation (lecture seule) | non |
 | `maclasse_telecharger_vignettes` | ZIP des vignettes (400×533, sans filigrane) → dossier local | non |
 | `maclasse_telecharger_trombinoscope` | PDF trombinoscope (`codes`, `nom_photo`, `aucun`) → dossier local | non |
+| `maclasse_fiches_acces` | PDF de toutes les fiches d'accès (coupons : URL famille, QR code, code) → `<projet>/fiches_acces_*.pdf` (sensible) | non |
+| `maclasse_telecharger_apercus` | aperçus **filigranés** d'une classe (filtres `codes`, `sans_visite`) pour les relances aux familles | non |
 | `maclasse_preparer_photos` | pipeline complet en arrière-plan → `charlemagne_ideleve/`, index, rapport (2–4 min) | non |
 | `maclasse_rapport` | état d'un job (`job=`) ou relecture d'une préparation (`sortie=`) | non |
 | `maclasse_importer_noms_prepare` | import d'une liste Nom/Prénom pour une classe (remplace les noms disponibles, garde les associations) | oui (2 temps) |
@@ -53,6 +55,10 @@ mkdir -p ~/.maclasse-mcp && chmod 700 ~/.maclasse-mcp
 
 Variables : `MACLASSE_EMAIL`/`MACLASSE_PASSWORD` ou `MACLASSE_CREDENTIALS` (fichier JSON), `MACLASSE_DOWNLOAD_DIR`,
 `MACLASSE_ENABLE_WRITES`, `MACLASSE_TIMEOUT`.
+
+## Photos de fratries
+
+`python -m maclasse_mcp.fratries --fratries … --eleves … --index … --db … --sortie …` (dépendances `pip install -e ".[fratries]"`) rapproche en local les photos de fratries (nommées `Fratrie NN` par le photographe, sans nom de famille) des photos individuelles déjà identifiées, sous la contrainte des fratries Charlemagne, et produit une planche PDF à valider par une personne plus les fichiers pour nommer les photos sur la plateforme. Traitement biométrique de mineurs : usage interne à l'école, empreintes non conservées, propositions à valider.
 
 ## Pipeline hors MCP
 

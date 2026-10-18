@@ -12,6 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "respx>=0.21"]
+fratries = ["insightface>=0.7", "onnxruntime>=1.17", "opencv-python-headless>=4.9", "reportlab>=4", "numpy"]
 
 [project.scripts]
 maclasse-mcp = "maclasse_mcp.__main__:main"

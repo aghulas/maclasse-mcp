@@ -66,6 +66,7 @@ def test_projet():
     e0, e1 = c.eleves
     assert e0.code == "ABCD1234" and e0.uuid_eleve.startswith("cccc3333") and e0.photo_uuid.startswith("bbbb2222")
     assert e0.nom_associe is None and e0.visites == 2 and e0.commandes == 1
+    assert e0.photo_url == "https://lbcache.maclasse.photo/s1/x/small/bbbb2222-2222-2222-2222-222222222222.jpeg"
     assert e1.nom_associe == "DUPONT Test"
     assert c.photos_groupe == [{"photo_uuid": "ffff6666-6666-6666-6666-666666666666", "code": "GRP00001"}]
 
@@ -80,3 +81,21 @@ def test_association():
 
 def test_normaliser():
     assert parsing.normaliser("  DE\tLA  Tour  Élodie ") == "de la tour elodie"
+
+
+FRATRIES = """
+<html><body>
+<div class="bloc-classe"><div class="classe-name"><h3 class="no-mb">Fratries
+ <span class="badge-fratrie" data-toggle="popover"><i class="las la-user-friends"></i> Fratrie</span></h3></div>
+ <a href="/triNomParticipants/niveau/ffff1111-1111-1111-1111-111111111111/tri">Noms des élèves</a>
+ <div id="tab-photos-indiv-ffff1111-1111-1111-1111-111111111111">
+  <fieldset class="filter-eleve" data-classe-uuid-brut="ffff1111-1111-1111-1111-111111111111"></fieldset>
+ </div></div>
+</body></html>
+"""
+
+
+def test_projet_classe_fratries():
+    c = parsing.parser_projet(FRATRIES)[0]
+    assert c.nom == "Fratries" and c.type_classe == "fratrie"
+    assert parsing.parser_projet(PROJET)[0].type_classe == "classe"

@@ -46,6 +46,7 @@ class Eleve:
     nom_associe: str | None
     visites: int | None
     commandes: int | None
+    photo_url: str | None = None  # vignette FILIGRANÉE du site (lbcache…/small/{uuid}.jpeg) ; /medium/ = 1000×750
 
 
 @dataclass
@@ -54,6 +55,7 @@ class Classe:
     uuid: str
     eleves: list[Eleve] = field(default_factory=list)
     photos_groupe: list[dict[str, Any]] = field(default_factory=list)
+    type_classe: str = "classe"  # « fratrie » pour la pseudo-classe des photos de fratries (badge du photographe)
 
     @property
     def nb_photos(self) -> int:
@@ -119,10 +121,15 @@ def parser_projet(html: str) -> list[Classe]:
         # Nom de la classe : <div class="bloc-classe"><div class="classe-name"><h3>CE1A</h3> … (structure du 15/10/2026)
         link = soup.select_one(f'a[href*="triNomParticipants/niveau/{uuid}/tri"]')
         nom = ""
+        type_classe = "classe"
         if link is not None:
             bloc = link.find_parent(class_="bloc-classe")
             h = bloc.select_one(".classe-name h3, .classe-name h4, .classe-name") if bloc is not None else None
             if h is not None:
+                # Le titre peut contenir un badge « Fratrie » (<span class="badge-fratrie">) : classe de photos de fratries.
+                for badge in h.select(".badge-fratrie"):
+                    type_classe = "fratrie"
+                    badge.decompose()
                 nom = h.get_text(" ", strip=True)
             else:  # repli : premier titre du conteneur
                 card = link
@@ -134,7 +141,7 @@ def parser_projet(html: str) -> list[Classe]:
                     if hh is not None:
                         nom = hh.get_text(" ", strip=True)
                         break
-        classe = Classe(nom=nom, uuid=uuid)
+        classe = Classe(nom=nom, uuid=uuid, type_classe=type_classe)
         indiv = soup.select_one(f"#tab-photos-indiv-{uuid}")
         if indiv is not None:
             for btn in indiv.select("button.btn-open-modal-dl-eleve-unique"):
@@ -149,9 +156,11 @@ def parser_projet(html: str) -> list[Classe]:
                 code = CODE_RE.search(txt)
                 img = card.find("img")
                 photo_uuid = None
+                photo_url = None
                 if img is not None:
                     pm = UUID_RE.search(img.get("src", ""))
                     photo_uuid = pm.group(0) if pm else None
+                    photo_url = img.get("src") or None
                 # Nom associé : <div class="eleve-block"><div class="widget-header"><h2 class="eleve-label">NOM Prénom</h2>
                 # (« Élève » tant qu'aucun nom n'est associé — structure vérifiée le 15/10/2026)
                 nom_associe = None
@@ -167,6 +176,7 @@ def parser_projet(html: str) -> list[Classe]:
                         uuid_eleve=btn.get("data-eleve-uuid"),
                         photo_uuid=photo_uuid,
                         nom_associe=nom_associe,
+                        photo_url=photo_url,
                         visites=_int(re.search(r"Visite\(s\)\s*:\s*(\d+)", txt).group(1)) if re.search(r"Visite\(s\)\s*:\s*(\d+)", txt) else None,
                         commandes=_int(re.search(r"Commande\(s\)\s*:\s*(\d+)", txt).group(1)) if re.search(r"Commande\(s\)\s*:\s*(\d+)", txt) else None,
                     )

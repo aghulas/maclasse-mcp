@@ -1,8 +1,9 @@
 """Serveur MCP maclasse (espace établissement ecole.maclasse.photo).
 
 Lecture : prises de vues, classes et élèves (codes d'accès, uuid, nom associé, visites, commandes),
-page d'association d'une classe. Exports locaux : ZIP des vignettes, trombinoscopes PDF, et
-pipeline complet de préparation des photos pour Charlemagne (preparer.py). Écriture (import de noms,
+page d'association d'une classe. Exports locaux : ZIP des vignettes, trombinoscopes PDF, fiches d'accès
+(coupons), aperçus filigranés pour les relances, et pipeline complet de préparation des photos pour
+Charlemagne (preparer.py) ; identification des photos de fratries hors MCP (fratries.py). Écriture (import de noms,
 association nom ↔ photo, retrait) : toujours en deux temps *_prepare_* puis maclasse_write_confirm,
 et seulement si MACLASSE_ENABLE_WRITES=1.
 
@@ -131,21 +132,24 @@ def maclasse_classes(uuid_projet: str) -> list[dict[str, Any]]:
     """Classes d'une prise de vue : nom, uuid de classe, nombre de photos individuelles, nombre de noms associés, photos de groupe."""
     out = []
     for c in _c().projet(uuid_projet):
-        out.append({"nom": c.nom, "uuid": c.uuid, "nb_photos": c.nb_photos, "nb_noms_associes": c.nb_noms_associes,
+        out.append({"nom": c.nom, "uuid": c.uuid, "type_classe": c.type_classe, "nb_photos": c.nb_photos, "nb_noms_associes": c.nb_noms_associes,
                     "nb_photos_groupe": len(c.photos_groupe),
                     "visites": sum(e.visites or 0 for e in c.eleves), "commandes": sum(e.commandes or 0 for e in c.eleves)})
     return out
 
 
 @mcp.tool()
-def maclasse_eleves(uuid_projet: str, classe: str | None = None, avec_codes: bool = False) -> list[dict[str, Any]]:
-    """Photos individuelles d'une prise de vue (toutes classes ou une classe par nom maclasse, ex. « CE1A ») :
-    uuid élève, nom associé, visites, commandes. Les codes d'accès ne sont renvoyés que si avec_codes=True."""
+def maclasse_eleves(uuid_projet: str, classe: str | None = None, avec_codes: bool = False, sans_visite: bool = False) -> list[dict[str, Any]]:
+    """Photos individuelles d'une prise de vue (toutes classes ou une classe par nom maclasse, ex. « CE1A » ou « Fratries ») :
+    uuid élève, nom associé, visites, commandes. sans_visite=True ne garde que les photos jamais consultées par la famille
+    (cible d'une relance). Les codes d'accès ne sont renvoyés que si avec_codes=True."""
     out = []
     for c in _c().projet(uuid_projet):
         if classe and normaliser(c.nom) != normaliser(classe):
             continue
         for e in c.eleves:
+            if sans_visite and (e.visites or 0) > 0:
+                continue
             d = {"classe": c.nom, "uuid_eleve": e.uuid_eleve, "nom_associe": e.nom_associe, "visites": e.visites, "commandes": e.commandes}
             if avec_codes:
                 d["code"] = e.code
@@ -231,6 +235,49 @@ def maclasse_telecharger_trombinoscope(uuid_projet: str, libelle: str = "codes",
     dest = _dossier(uuid_projet) / f"trombinoscope_{libelle}_{_horodatage()}.pdf"
     p = _c().telecharger_trombinoscope(uuid_projet, dest, libelle, par_page or None)
     return {"fichier": str(p), "octets": p.stat().st_size}
+
+
+@mcp.tool()
+def maclasse_fiches_acces(uuid_projet: str) -> dict[str, Any]:
+    """Télécharge le PDF des fiches d'accès (coupons remis aux familles : URL https://apdl.maclasse.photo/, QR code, code
+    d'accès ; un coupon par élève ou fratrie + un coupon « photos de groupe » par classe) dans MACLASSE_DOWNLOAD_DIR/<projet>/.
+    Sert à réimprimer le coupon d'une famille qui a perdu son code. Le PDF contient tous les codes : ne pas le diffuser."""
+    dest = _dossier(uuid_projet) / f"fiches_acces_{_horodatage()}.pdf"
+    p = _c().telecharger_fiches_acces(uuid_projet, dest)
+    return {"fichier": str(p), "octets": p.stat().st_size}
+
+
+@mcp.tool()
+def maclasse_telecharger_apercus(uuid_projet: str, classe: str, codes: list[str] | None = None, sans_visite: bool = False,
+                                 dossier: str | None = None) -> dict[str, Any]:
+    """Télécharge les aperçus FILIGRANÉS (« COPIE INTERDITE », 1000×750, ~190 Ko) des photos d'une classe (ou de la
+    pseudo-classe « Fratries »), à joindre à un message de relance aux familles. Filtres : codes (liste de codes d'accès)
+    et/ou sans_visite (photos jamais consultées). Fichiers `apercu_<classe>_<nom associé ou code>.jpg` dans `dossier`
+    (défaut MACLASSE_DOWNLOAD_DIR/<projet>/apercus_<classe>/), jamais écrasés. Ce ne sont pas les photos livrables
+    (export « Vignettes élèves » pour cela)."""
+    import re as _re
+    cible = Path(dossier) if dossier else _dossier(uuid_projet) / f"apercus_{normaliser(classe).replace(' ', '_')}"
+    voulus = {c.upper() for c in (codes or [])}
+    faits, ignores = [], []
+    for c in _c().projet(uuid_projet):
+        if normaliser(c.nom) != normaliser(classe):
+            continue
+        for e in c.eleves:
+            if voulus and e.code.upper() not in voulus:
+                continue
+            if sans_visite and (e.visites or 0) > 0:
+                continue
+            if not e.photo_url:
+                ignores.append(e.code)
+                continue
+            base = _re.sub(r"[^A-Za-z0-9]+", "_", e.nom_associe or e.code).strip("_")
+            dest = cible / f"apercu_{normaliser(c.nom).replace(' ', '_')}_{base}.jpg"
+            if dest.exists():
+                ignores.append(f"{e.code} (déjà présent)")
+                continue
+            _c().telecharger_apercu(e.photo_url, dest)
+            faits.append({"code": e.code, "nom_associe": e.nom_associe, "uuid_eleve": e.uuid_eleve, "fichier": str(dest)})
+    return {"dossier": str(cible), "nb": len(faits), "apercus": faits, "ignores": ignores}
 
 
 def _preparer(uuid_projet: str, liste_eleves: str, classes_map: dict[str, str] | None, out_dir: Path, par_page: int) -> dict[str, Any]:

@@ -21,6 +21,10 @@ Routes observées (15/10/2026, bundle FOS JS Routing de l'application) :
   POST /api/nomToEleve   nomToMove=<index>, uuidEleveToAttribute=<uuidEleve>   → {"actionIsOK": true}
   PUT  /api/nomToEleve   uuidEleveToEmpty, uuidEleveToAttribute (déplacer un nom)
   DELETE /api/nomToEleve uuidEleveToEmpty (retirer le nom d'une photo)
+  POST /api/couponAcces  uuidProjet=<uuid>  → PDF de toutes les fiches d'accès (coupons : URL famille, QR code, code d'accès)
+  GET  https://lbcache.maclasse.photo/…/{small|medium}/{uuidPhoto}.jpeg   vignette FILIGRANÉE (publique, sans session) ;
+         small 262×350, medium 1000×750 : utilisable comme aperçu envoyé à une famille, jamais comme photo livrée.
+  Côté famille : https://apdl.maclasse.photo/ (sous-domaine du photographe, imprimé sur les coupons) + code d'accès.
 
 Les images affichées (lbcache.maclasse.photo) sont filigranées : seul l'export ZIP est exploitable.
 Journalisation sur stderr uniquement, jamais d'identifiant ni de contenu nominatif.
@@ -168,6 +172,38 @@ class MaclasseClient:
         else:
             url = f"/trombinoscope/projet/{uuid_projet}/{aff}/allOnPage"
         return self._telecharger(url, dest)
+
+    def telecharger_fiches_acces(self, uuid_projet: str, dest: Path) -> Path:
+        """PDF des fiches d'accès (coupons) de toute la prise de vue : un coupon par élève/fratrie avec son code d'accès
+        et un coupon « photos de groupe » par classe (SM26 : 141 pages). Contient tous les codes : fichier sensible."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            raise MaclasseError(f"Fichier déjà présent, non écrasé : {dest}")
+        r = self._request("POST", "/api/couponAcces", data={"uuidProjet": uuid_projet},
+                          headers={"X-Requested-With": "XMLHttpRequest"})
+        r.raise_for_status()
+        if not r.content.startswith(b"%PDF"):
+            raise MaclasseError("La plateforme n'a pas renvoyé le PDF des fiches d'accès")
+        dest.write_bytes(r.content)
+        dest.chmod(0o600)
+        log.info("fiches d'accès téléchargées (%d octets)", len(r.content))
+        return dest
+
+    def telecharger_apercu(self, photo_url: str, dest: Path, taille: str = "medium") -> Path:
+        """Vignette filigranée du site (CDN public) : aperçu à envoyer à une famille, pas une photo exploitable."""
+        if "lbcache.maclasse.photo" not in photo_url:
+            raise MaclasseError("URL d'aperçu inattendue (CDN maclasse attendu)")
+        url = photo_url.replace("/small/", f"/{taille}/")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            raise MaclasseError(f"Fichier déjà présent, non écrasé : {dest}")
+        r = httpx.get(url, timeout=SETTINGS.timeout, follow_redirects=True)
+        r.raise_for_status()
+        if not r.headers.get("content-type", "").startswith("image/"):
+            raise MaclasseError("Le CDN n'a pas renvoyé une image")
+        dest.write_bytes(r.content)
+        dest.chmod(0o600)
+        return dest
 
     # ---------------------------------------------------------------- écriture (appelée uniquement via writes.py)
     def importer_noms(self, uuid_classe: str, csv_bytes: bytes, ordre: str = "nomPrenom", entete: bool = True) -> parsing.PageAssociation:
