@@ -238,13 +238,81 @@ def maclasse_telecharger_trombinoscope(uuid_projet: str, libelle: str = "codes",
 
 
 @mcp.tool()
-def maclasse_fiches_acces(uuid_projet: str) -> dict[str, Any]:
-    """Télécharge le PDF des fiches d'accès (coupons remis aux familles : URL https://apdl.maclasse.photo/, QR code, code
-    d'accès ; un coupon par élève ou fratrie + un coupon « photos de groupe » par classe) dans MACLASSE_DOWNLOAD_DIR/<projet>/.
-    Sert à réimprimer le coupon d'une famille qui a perdu son code. Le PDF contient tous les codes : ne pas le diffuser."""
-    dest = _dossier(uuid_projet) / f"fiches_acces_{_horodatage()}.pdf"
-    p = _c().telecharger_fiches_acces(uuid_projet, dest)
+def maclasse_fiches_acces(uuid_projet: str, classe: str | None = None, codes: list[str] | None = None,
+                          sans_visite: bool = False, format: str = "pdf", taille: str = "10x15", filigrane: bool = False,
+                          groupe: bool = False, jamais_connectes: bool = False, dossier: str | None = None) -> dict[str, Any]:
+    """Fiches d'accès (coupons remis aux familles : URL https://apdl.maclasse.photo/, QR code, code d'accès, photo).
+    Trois portées :
+    - par élève/fratrie (codes=[…] et/ou classe + sans_visite=True) : un fichier par fiche, nommé
+      `coupon_<classe>_<nom associé ou code>.pdf|jpg` (JPG obtenu en convertissant le PDF 10×15, 300 dpi) ;
+    - une classe (classe=…, sans codes ni sans_visite) : un fichier pour la classe — pdf, excel (sans photo) ou jpg
+      (ZIP de JPG numérotés, non nominatifs) ; groupe=True : la fiche « photos de groupe » de la classe ;
+    - toute la prise de vue (ni classe ni codes) : pdf ou excel ; jamais_connectes=True ne garde que les élèves jamais
+      connectés et sans commande (filtre de la plateforme). Le JPG de toute la prise de vue n'est pas proposé (archive
+      envoyée par e-mail au compte école).
+    taille : 10x15 (une fiche par page) ou A4 (plusieurs par page) ; filigrane=False : photo nette sur la fiche.
+    Fichiers dans `dossier` (défaut MACLASSE_DOWNLOAD_DIR/<projet>/fiches_acces/), jamais écrasés. Les fiches contiennent
+    les codes : ne transmettre à une famille que la sienne."""
+    import re as _re
+    cible = Path(dossier) if dossier else _dossier(uuid_projet) / "fiches_acces"
+    h = _horodatage()
+    wm = "_filigrane" if filigrane else ""
+    if codes or sans_visite:
+        voulus = {c.upper() for c in (codes or [])}
+        faits, ignores = [], []
+        for c in _c().projet(uuid_projet):
+            if classe and normaliser(c.nom) != normaliser(classe):
+                continue
+            for e in c.eleves:
+                if voulus and e.code.upper() not in voulus:
+                    continue
+                if sans_visite and (e.visites or 0) > 0:
+                    continue
+                if not e.uuid_eleve:
+                    ignores.append(e.code)
+                    continue
+                base = _re.sub(r"[^A-Za-z0-9]+", "_", e.nom_associe or e.code).strip("_")
+                stem = f"coupon_{normaliser(c.nom).replace(' ', '_')}_{base}{wm}"
+                pdf = cible / f"{stem}.pdf"
+                if pdf.exists() or (format == "jpg" and (cible / f"{stem}.jpg").exists()):
+                    ignores.append(f"{e.code} (déjà présent)")
+                    continue
+                _c().telecharger_coupons(pdf, uuid_eleve=e.uuid_eleve, format="pdf", taille=taille, filigrane=filigrane)
+                fichier = pdf
+                if format == "jpg":
+                    fichier = pdf_vers_jpg(pdf, cible / f"{stem}.jpg")
+                    pdf.unlink()
+                faits.append({"code": e.code, "nom_associe": e.nom_associe, "classe": c.nom, "fichier": str(fichier)})
+        if voulus:
+            trouves = {f["code"].upper() for f in faits} | {i.split(" ")[0].upper() for i in ignores}
+            ignores += [f"{x} (code introuvable)" for x in sorted(voulus - trouves)]
+        return {"dossier": str(cible), "nb": len(faits), "fiches": faits, "ignores": ignores}
+    ext = {"pdf": "pdf", "excel": "xlsx", "jpg": "zip"}.get(format, format)
+    if classe:
+        cl = next((c for c in _c().projet(uuid_projet) if normaliser(c.nom) == normaliser(classe)), None)
+        if cl is None:
+            raise ValueError(f"Classe introuvable : {classe}")
+        nom = f"coupons_{'groupe_' if groupe else ''}{normaliser(cl.nom).replace(' ', '_')}_{taille if format != 'excel' else 'liste'}{wm}_{h}.{ext}"
+        p = _c().telecharger_coupons(cible / nom, uuid_classe=cl.uuid, format=format, taille=taille, filigrane=filigrane, groupe=groupe)
+    else:
+        suffixe = "_jamais_connectes" if jamais_connectes else ""
+        nom = f"coupons_{'groupe_' if groupe else ''}prise_de_vue{suffixe}_{taille if format != 'excel' else 'liste'}{wm}_{h}.{ext}"
+        p = _c().telecharger_coupons(cible / nom, uuid_projet=uuid_projet, format=format, taille=taille, filigrane=filigrane,
+                                     groupe=groupe, jamais_connectes=jamais_connectes)
     return {"fichier": str(p), "octets": p.stat().st_size}
+
+
+def pdf_vers_jpg(pdf: Path, jpg: Path, dpi: int = 300) -> Path:
+    """Première page d'un PDF → JPEG (pypdfium2, dépendance de pdfplumber)."""
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(str(pdf))
+    try:
+        img = doc[0].render(scale=dpi / 72).to_pil().convert("RGB")
+    finally:
+        doc.close()
+    img.save(jpg, "JPEG", quality=90)
+    jpg.chmod(0o600)
+    return jpg
 
 
 @mcp.tool()

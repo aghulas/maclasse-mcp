@@ -21,7 +21,14 @@ Routes observées (15/10/2026, bundle FOS JS Routing de l'application) :
   POST /api/nomToEleve   nomToMove=<index>, uuidEleveToAttribute=<uuidEleve>   → {"actionIsOK": true}
   PUT  /api/nomToEleve   uuidEleveToEmpty, uuidEleveToAttribute (déplacer un nom)
   DELETE /api/nomToEleve uuidEleveToEmpty (retirer le nom d'une photo)
-  POST /api/couponAcces  uuidProjet=<uuid>  → PDF de toutes les fiches d'accès (coupons : URL famille, QR code, code d'accès)
+  GET  /api/couponAcces  (X-Requested-With) fiches d'accès / coupons (URL famille, QR code, code, photo de l'élève) :
+         uuidProjet | uuidClasse | uuidEleve (un seul renseigné), typeAccess=indiv|groupe, typeFormat=pdf|jpg|excel,
+         pageSize=A4|10x15, watermark=true|false, filter=''|filter-never-connected-no-commande
+         → pdf : PDF ; excel : xlsx (content-type text/html trompeur) ; jpg (classe) : JSON {UrlApiGeneration=
+         https://api.maclasse.photo/gs/getCoupons, …} à reposter tel quel en JSON → ZIP de JPG 1500×1000 numérotés
+         000001.jpg… dans un ordre NON lié à la liste (pas de renommage nominatif possible) ; jpg + uuidProjet = archive
+         générée en asynchrone et envoyée par e-mail au compte école (30 min à 2 h) : non utilisé ; jpg + uuidEleve : vide.
+  POST /api/couponAcces  uuidProjet=<uuid>  → PDF de toutes les fiches (ancien appel, équivalent A4 projet)
   GET  https://lbcache.maclasse.photo/…/{small|medium}/{uuidPhoto}.jpeg   vignette FILIGRANÉE (publique, sans session) ;
          small 262×350, medium 1000×750 : utilisable comme aperçu envoyé à une famille, jamais comme photo livrée.
   Côté famille : https://apdl.maclasse.photo/ (sous-domaine du photographe, imprimé sur les coupons) + code d'accès.
@@ -172,6 +179,49 @@ class MaclasseClient:
         else:
             url = f"/trombinoscope/projet/{uuid_projet}/{aff}/allOnPage"
         return self._telecharger(url, dest)
+
+    def telecharger_coupons(self, dest: Path, *, uuid_projet: str = "", uuid_classe: str = "", uuid_eleve: str = "",
+                            format: str = "pdf", taille: str = "10x15", filigrane: bool = False, groupe: bool = False,
+                            jamais_connectes: bool = False) -> Path:
+        """Fiches d'accès (coupons) au format de la plateforme. Un seul de uuid_projet / uuid_classe / uuid_eleve.
+        format pdf → .pdf ; excel → .xlsx (sans photo, pour logiciel de vie scolaire) ; jpg (classe uniquement) → .zip."""
+        cibles = [x for x in (uuid_projet, uuid_classe, uuid_eleve) if x]
+        if len(cibles) != 1:
+            raise MaclasseError("Indiquer exactement un projet, une classe ou un élève")
+        if format not in ("pdf", "jpg", "excel"):
+            raise MaclasseError("format : pdf, jpg ou excel")
+        if format == "jpg" and not uuid_classe:
+            raise MaclasseError("JPG disponible par classe seulement (projet : archive envoyée par e-mail ; élève : "
+                                "utiliser le PDF puis le convertir)")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            raise MaclasseError(f"Fichier déjà présent, non écrasé : {dest}")
+        params = {"uuidProjet": uuid_projet, "uuidClasse": uuid_classe, "uuidEleve": uuid_eleve,
+                  "pageSize": "" if format == "excel" else taille,
+                  "filter": "filter-never-connected-no-commande" if jamais_connectes else "",
+                  "typeFormat": format, "typeAccess": "groupe" if groupe else "indiv",
+                  "watermark": "true" if filigrane else "false"}
+        r = self._request("GET", "/api/couponAcces", params=params, headers={"X-Requested-With": "XMLHttpRequest"})
+        r.raise_for_status()
+        if format == "jpg":
+            try:
+                spec = r.json()
+            except ValueError:
+                raise MaclasseError("La plateforme n'a pas renvoyé la demande de génération JPG")
+            z = httpx.post(spec["UrlApiGeneration"], json=spec, timeout=max(SETTINGS.timeout, 180))
+            z.raise_for_status()
+            contenu = z.content
+            if not contenu.startswith(b"PK"):
+                raise MaclasseError("Le service de génération n'a pas renvoyé de ZIP")
+        else:
+            contenu = r.content
+            attendu = b"%PDF" if format == "pdf" else b"PK"
+            if not contenu.startswith(attendu):
+                raise MaclasseError("Réponse inattendue de la plateforme (fiche introuvable ou format refusé)")
+        dest.write_bytes(contenu)
+        dest.chmod(0o600)
+        log.info("fiches d'accès %s téléchargées (%d octets)", format, len(contenu))
+        return dest
 
     def telecharger_fiches_acces(self, uuid_projet: str, dest: Path) -> Path:
         """PDF des fiches d'accès (coupons) de toute la prise de vue : un coupon par élève/fratrie avec son code d'accès

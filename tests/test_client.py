@@ -69,3 +69,35 @@ def test_apercu_filigrane(creds, tmp_path):
     assert p.read_bytes().startswith(b"\xff\xd8")
     with pytest.raises(cl.MaclasseError):
         c.telecharger_apercu("https://autre.example/x.jpg", tmp_path / "b.jpg")
+
+
+@respx.mock
+def test_coupons_pdf_eleve_et_excel_classe(creds, tmp_path):
+    respx.post("https://ecole.example/login").mock(return_value=httpx.Response(302, headers={"location": "/"}))
+    route = respx.get("https://ecole.example/api/couponAcces").mock(side_effect=[
+        httpx.Response(200, content=b"%PDF-1.4 x", headers={"content-type": "application/pdf"}),
+        httpx.Response(200, content=b"PK\x03\x04xlsx", headers={"content-type": "text/html"}),
+    ])
+    c = cl.MaclasseClient()
+    c.telecharger_coupons(tmp_path / "e.pdf", uuid_eleve="e1", taille="10x15")
+    q = dict(route.calls[0].request.url.params)
+    assert q["uuidEleve"] == "e1" and q["typeFormat"] == "pdf" and q["watermark"] == "false" and q["typeAccess"] == "indiv"
+    c.telecharger_coupons(tmp_path / "c.xlsx", uuid_classe="k1", format="excel")
+    assert dict(route.calls[1].request.url.params)["pageSize"] == ""
+
+
+@respx.mock
+def test_coupons_jpg_classe_deux_temps(creds, tmp_path):
+    respx.post("https://ecole.example/login").mock(return_value=httpx.Response(302, headers={"location": "/"}))
+    respx.get("https://ecole.example/api/couponAcces").mock(return_value=httpx.Response(
+        200, json={"UrlApiGeneration": "https://api.example/gs/getCoupons", "ListeElevesByClasse": []}))
+    gen = respx.post("https://api.example/gs/getCoupons").mock(return_value=httpx.Response(200, content=b"PK\x03\x04zip"))
+    p = cl.MaclasseClient().telecharger_coupons(tmp_path / "c.zip", uuid_classe="k1", format="jpg")
+    assert p.read_bytes().startswith(b"PK") and gen.called
+
+
+def test_coupons_refus(creds, tmp_path):
+    c = cl.MaclasseClient()
+    for kw in ({"uuid_projet": "p", "format": "jpg"}, {"uuid_eleve": "e", "format": "jpg"}, {}, {"uuid_projet": "p", "uuid_classe": "k"}):
+        with pytest.raises(cl.MaclasseError):
+            c.telecharger_coupons(tmp_path / "x", **kw)

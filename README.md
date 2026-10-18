@@ -21,7 +21,7 @@ Edumoov/Educartable n'a pas de photo élève (vérifié le 15/10/2026) : rien n'
 | `maclasse_paiements_a_valider` | commandes chèque/espèces en attente de validation (lecture seule) | non |
 | `maclasse_telecharger_vignettes` | ZIP des vignettes (400×533, sans filigrane) → dossier local | non |
 | `maclasse_telecharger_trombinoscope` | PDF trombinoscope (`codes`, `nom_photo`, `aucun`) → dossier local | non |
-| `maclasse_fiches_acces` | PDF de toutes les fiches d'accès (coupons : URL famille, QR code, code) → `<projet>/fiches_acces_*.pdf` (sensible) | non |
+| `maclasse_fiches_acces` | fiches d'accès / coupons (URL famille, QR code, code, photo) : par élève ou fratrie (`codes`, `sans_visite` ; PDF ou JPG converti), par classe (PDF, Excel, ZIP JPG ; `groupe`), toute la prise de vue (PDF, Excel ; `jamais_connectes`) ; 10x15 ou A4, avec ou sans filigrane → `<projet>/fiches_acces/` (sensible) | non |
 | `maclasse_telecharger_apercus` | aperçus **filigranés** d'une classe (filtres `codes`, `sans_visite`) pour les relances aux familles | non |
 | `maclasse_preparer_photos` | pipeline complet en arrière-plan → `charlemagne_ideleve/`, index, rapport (2–4 min) | non |
 | `maclasse_rapport` | état d'un job (`job=`) ou relecture d'une préparation (`sortie=`) | non |
